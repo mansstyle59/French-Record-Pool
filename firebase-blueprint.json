@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "DJ user profile and subscription details",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "subscriptionStatus": { "type": "string", "enum": ["free", "pro", "admin"] },
+        "favoriteTracks": { "type": "array", "description": "Array of track IDs" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Track": {
+      "title": "Track",
+      "description": "Music track metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "artist": { "type": "string" },
+        "remixer": { "type": "string" },
+        "genre": { "type": "string" },
+        "bpm": { "type": "number" },
+        "key": { "type": "string" },
+        "fileUrl": { "type": "string", "description": "High quality download URL" },
+        "previewUrl": { "type": "string", "description": "30-60s preview URL" },
+        "coverUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "downloadCount": { "type": "integer" },
+        "isExclusive": { "type": "boolean" }
+      },
+      "required": ["title", "artist", "fileUrl", "previewUrl"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global site configuration and layout",
+      "type": "object",
+      "properties": {
+        "heroTitle1": { "type": "string" },
+        "heroTitle2": { "type": "string" },
+        "heroTitle3": { "type": "string" },
+        "heroDescription": { "type": "string" },
+        "heroImageUrl": { "type": "string" },
+        "brandName": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Individual user profiles"
+    },
+    "/tracks/{trackId}": {
+      "schema": "Track",
+      "description": "Collection of all available music tracks"
+    },
+    "/settings/main": {
+      "schema": "SiteSettings",
+      "description": "Global site configuration"
+    }
+  }
+}
