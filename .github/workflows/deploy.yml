@@ -22,7 +22,19 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Deploy to Firebase Hosting
+      # Méthode 1 : FIREBASE_TOKEN (obtenu via `npx firebase-tools login:ci`)
+      - name: Deploy via Firebase Token
+        if: ${{ secrets.FIREBASE_TOKEN != '' }}
         run: npx firebase-tools deploy --only hosting --token "$FIREBASE_TOKEN" --non-interactive
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+      # Méthode 2 : FIREBASE_SERVICE_ACCOUNT (JSON clé service account Google Cloud)
+      - name: Deploy via Service Account
+        if: ${{ secrets.FIREBASE_TOKEN == '' && secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          channelId: live
+          projectId: gen-lang-client-0064347139
