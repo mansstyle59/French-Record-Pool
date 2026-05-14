@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, deleteDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../lib/firebase';
 import { extractMetadata, formatDuration } from '../lib/metadata';
 import { Track, SiteSettings } from '../types';
-import { Upload, Trash2, Save, Plus, Disc, LayoutDashboard, Database, RefreshCw, Users, BarChart3, Activity, UserCheck, Shield, Music, Mail, Search, Zap } from 'lucide-react';
+import { Upload, Trash2, Save, Plus, Disc, LayoutDashboard, Database, RefreshCw, Users, BarChart3, Activity, UserCheck, Shield, Music, Mail, Search, Zap, Image, X } from 'lucide-react';
+import { GENRES } from '../data';
 import { useTracks } from '../hooks/useTracks';
 import { useAuth } from './AuthContext';
 
@@ -75,6 +76,8 @@ export default function AdminPanel() {
   const [pendingTrack, setPendingTrack] = useState<Partial<Track>>({});
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [artworkFile, setArtworkFile] = useState<File | null>(null);
+  const [artworkPreviewUrl, setArtworkPreviewUrl] = useState<string | null>(null);
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
@@ -140,10 +143,32 @@ export default function AdminPanel() {
     u.displayName?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const resetUpload = () => {
+    setPendingTrack({});
+    setAudioFile(null);
+    setArtworkFile(null);
+    if (artworkPreviewUrl) URL.revokeObjectURL(artworkPreviewUrl);
+    setArtworkPreviewUrl(null);
+    setUploadState('idle');
+    setUploadProgress(0);
+  };
+
+  const handleArtworkUpload = (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    if (artworkPreviewUrl) URL.revokeObjectURL(artworkPreviewUrl);
+    const url = URL.createObjectURL(file);
+    setArtworkFile(file);
+    setArtworkPreviewUrl(url);
+    setPendingTrack(prev => ({ ...prev, artwork: url }));
+  };
+
   const handleFileUpload = async (file: File) => {
     if (!file) return;
 
     setAudioFile(file);
+    setArtworkFile(null);
+    if (artworkPreviewUrl) URL.revokeObjectURL(artworkPreviewUrl);
+    setArtworkPreviewUrl(null);
     setUploadState('extracting');
     try {
       const metadata = await extractMetadata(file);
@@ -185,22 +210,30 @@ export default function AdminPanel() {
 
   const saveTrack = async () => {
     if (!pendingTrack.title || !pendingTrack.artist || !audioFile) return;
-    
+
     setUploadState('uploading');
     setUploadProgress(0);
 
     try {
-      // 1. Upload file to Firebase Storage
+      // 1. Upload artwork if provided
+      let artworkUrl = pendingTrack.artwork || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=400&h=400&fit=crop';
+      if (artworkFile) {
+        const artworkRef = ref(storage, `artworks/${Date.now()}_${artworkFile.name}`);
+        await uploadBytes(artworkRef, artworkFile);
+        artworkUrl = await getDownloadURL(artworkRef);
+      }
+
+      // 2. Upload audio file to Firebase Storage
       const storageRef = ref(storage, `tracks/${Date.now()}_${audioFile.name}`);
       const uploadTask = uploadBytesResumable(storageRef, audioFile);
 
       const downloadUrl = await new Promise<string>((resolve, reject) => {
-        uploadTask.on('state_changed', 
+        uploadTask.on('state_changed',
           (snapshot) => {
             const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
             setUploadProgress(progress);
-          }, 
-          (error) => reject(error), 
+          },
+          (error) => reject(error),
           async () => {
             const url = await getDownloadURL(uploadTask.snapshot.ref);
             resolve(url);
@@ -208,21 +241,19 @@ export default function AdminPanel() {
         );
       });
 
-      // 2. Save metadata to Firestore
+      // 3. Save metadata to Firestore
       await addDoc(collection(db, 'tracks'), {
         ...pendingTrack,
-        fileUrl: downloadUrl, // Store actual storage URL
-        previewUrl: downloadUrl, // Using same URL for preview for now
+        artwork: artworkUrl,
+        fileUrl: downloadUrl,
+        previewUrl: downloadUrl,
         createdAt: serverTimestamp(),
         downloadCount: 0,
         isExclusive: false
       });
 
       alert('Morceau ajouté avec succès !');
-      setPendingTrack({});
-      setAudioFile(null);
-      setUploadState('idle');
-      setUploadProgress(0);
+      resetUpload();
     } catch (error) {
       console.error('Failed to save track:', error);
       alert('Erreur lors de l\'enregistrement : ' + (error instanceof Error ? error.message : String(error)));
@@ -598,113 +629,187 @@ export default function AdminPanel() {
                   <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
                     <Plus className="text-brand-primary" size={16} /> Upload Engine
                   </h3>
-                  
+
                   <div className="space-y-3">
+                    {/* Audio file drop zone */}
                     <label className="block">
                       <span className="text-[8px] font-black uppercase text-gray-500 mb-1.5 block tracking-widest">Master Audio Stream</span>
-                      <div className="relative group">
-                        <input 
-                          type="file" 
-                          accept="audio/*" 
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) handleFileUpload(file);
-                          }}
-                          className="hidden" 
-                          id="track-upload" 
-                        />
-                        <label 
-                          htmlFor="track-upload"
-                          onDragOver={onDragOver}
-                          onDragLeave={onDragLeave}
-                          onDrop={onDrop}
-                          className={`w-full border border-dashed rounded-xl p-6 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer ${isDragging ? 'border-brand-primary bg-brand-primary/10' : 'border-surface-700 hover:border-brand-primary/50'}`}
-                        >
-                          <Upload className={isDragging ? 'text-brand-primary' : 'text-gray-500'} size={20} />
-                          <span className="text-[8px] font-black uppercase text-gray-400">Drag & Drop Master</span>
-                        </label>
-                      </div>
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFileUpload(file); }}
+                        className="hidden"
+                        id="track-upload"
+                      />
+                      <label
+                        htmlFor="track-upload"
+                        onDragOver={onDragOver}
+                        onDragLeave={onDragLeave}
+                        onDrop={onDrop}
+                        className={`w-full border border-dashed rounded-xl p-6 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer ${isDragging ? 'border-brand-primary bg-brand-primary/10' : 'border-surface-700 hover:border-brand-primary/50'}`}
+                      >
+                        {uploadState === 'extracting' ? (
+                          <>
+                            <RefreshCw className="animate-spin text-brand-primary" size={20} />
+                            <span className="text-[8px] font-black uppercase text-brand-primary">Extraction métadonnées...</span>
+                          </>
+                        ) : audioFile ? (
+                          <>
+                            <Music className="text-brand-primary" size={20} />
+                            <span className="text-[8px] font-black uppercase text-white truncate max-w-full px-2">{audioFile.name}</span>
+                            <span className="text-[7px] text-gray-500">{(audioFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+                          </>
+                        ) : (
+                          <>
+                            <Upload className={isDragging ? 'text-brand-primary' : 'text-gray-500'} size={20} />
+                            <span className="text-[8px] font-black uppercase text-gray-400">Drag & Drop ou cliquer</span>
+                          </>
+                        )}
+                      </label>
                     </label>
 
                     {pendingTrack.title !== undefined && (
                       <div className="space-y-3 animate-in fade-in zoom-in-95 duration-300">
                         <div className="p-3 bg-surface-900 rounded-xl border border-surface-700 shadow-xl">
                           <h4 className="text-[8px] font-black text-brand-primary uppercase mb-3 tracking-widest flex items-center gap-1.5">
-                             <Activity size={10} /> STREAM_METADATA_INIT
+                            <Activity size={10} /> Métadonnées du Morceau
                           </h4>
                           <div className="space-y-3">
+
+                            {/* Artwork section */}
                             <div className="space-y-1">
-                               <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Titre</label>
-                               <input 
-                                 type="text" 
-                                 value={pendingTrack.title} 
-                                 onChange={e => setPendingTrack({...pendingTrack, title: e.target.value})}
-                                 className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
-                               />
+                              <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Pochette</label>
+                              <div className="flex items-center gap-3">
+                                <div className="relative flex-shrink-0">
+                                  {artworkPreviewUrl ? (
+                                    <img src={artworkPreviewUrl} className="w-16 h-16 rounded-xl object-cover shadow-lg" alt="artwork" />
+                                  ) : (
+                                    <div className="w-16 h-16 rounded-xl bg-surface-800 border border-surface-700 flex items-center justify-center">
+                                      <Image size={20} className="text-gray-600" />
+                                    </div>
+                                  )}
+                                  <label htmlFor="artwork-upload" className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 hover:opacity-100 rounded-xl cursor-pointer transition-opacity">
+                                    <Upload size={14} className="text-white" />
+                                  </label>
+                                  <input
+                                    id="artwork-upload"
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={e => { const f = e.target.files?.[0]; if (f) handleArtworkUpload(f); }}
+                                  />
+                                </div>
+                                <label htmlFor="artwork-upload" className="flex-1 py-2 border border-dashed border-surface-700 hover:border-brand-primary/50 rounded-lg text-[8px] text-gray-500 cursor-pointer transition-colors text-center">
+                                  {artworkFile ? artworkFile.name : 'Choisir une pochette...'}
+                                </label>
+                              </div>
                             </div>
+
+                            {/* Title */}
                             <div className="space-y-1">
-                               <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Artiste</label>
-                               <input 
-                                 type="text" 
-                                 value={pendingTrack.artist} 
-                                 onChange={e => setPendingTrack({...pendingTrack, artist: e.target.value})}
-                                 className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
-                               />
+                              <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Titre</label>
+                              <input
+                                type="text"
+                                value={pendingTrack.title}
+                                onChange={e => setPendingTrack({...pendingTrack, title: e.target.value})}
+                                className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
+                              />
                             </div>
+
+                            {/* Artist */}
+                            <div className="space-y-1">
+                              <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Artiste</label>
+                              <input
+                                type="text"
+                                value={pendingTrack.artist}
+                                onChange={e => setPendingTrack({...pendingTrack, artist: e.target.value})}
+                                className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
+                              />
+                            </div>
+
+                            {/* BPM + Duration */}
                             <div className="grid grid-cols-2 gap-2">
-                               <div className="space-y-1">
-                                  <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">BPM</label>
-                                  <input 
-                                    type="number" 
-                                    value={pendingTrack.bpm} 
-                                    onChange={e => setPendingTrack({...pendingTrack, bpm: parseInt(e.target.value)})}
-                                    className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
-                                  />
-                               </div>
-                               <div className="space-y-1">
-                                  <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">DURÉE</label>
-                                  <input 
-                                    type="text" 
-                                    value={pendingTrack.duration} 
-                                    onChange={e => setPendingTrack({...pendingTrack, duration: e.target.value})}
-                                    className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
-                                  />
-                               </div>
+                              <div className="space-y-1">
+                                <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">BPM</label>
+                                <input
+                                  type="number"
+                                  value={pendingTrack.bpm}
+                                  onChange={e => setPendingTrack({...pendingTrack, bpm: parseInt(e.target.value)})}
+                                  className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Durée</label>
+                                <input
+                                  type="text"
+                                  value={pendingTrack.duration}
+                                  onChange={e => setPendingTrack({...pendingTrack, duration: e.target.value})}
+                                  className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none"
+                                />
+                              </div>
                             </div>
+
+                            {/* Key (tonalité) */}
                             <div className="space-y-1">
-                               <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Genre</label>
-                               <select 
-                                 value={pendingTrack.genre}
-                                 onChange={e => setPendingTrack({...pendingTrack, genre: e.target.value})}
-                                 className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none font-mono"
-                               >
-                                 <option value="House">House</option>
-                                 <option value="Tech House">Tech House</option>
-                                 <option value="Techno">Techno</option>
-                               </select>
+                              <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Tonalité</label>
+                              <select
+                                value={pendingTrack.key || ''}
+                                onChange={e => setPendingTrack({...pendingTrack, key: e.target.value})}
+                                className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none font-mono"
+                              >
+                                <option value="">— Sélectionner —</option>
+                                {['Am','A','Bbm','Bb','Bm','B','Cm','C','C#m','C#','Dm','D','Ebm','Eb','Em','E','Fm','F','F#m','F#','Gm','G','Abm','Ab'].map(k => (
+                                  <option key={k} value={k}>{k}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {/* Genre */}
+                            <div className="space-y-1">
+                              <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest px-1">Genre</label>
+                              <select
+                                value={pendingTrack.genre}
+                                onChange={e => setPendingTrack({...pendingTrack, genre: e.target.value})}
+                                className="w-full bg-surface-800 p-2.5 rounded-lg text-[10px] font-bold border border-surface-700 focus:border-brand-primary outline-none font-mono"
+                              >
+                                {GENRES.map(g => (
+                                  <option key={g.id} value={g.name}>{g.name}</option>
+                                ))}
+                              </select>
                             </div>
                           </div>
                         </div>
-                        <button 
-                          onClick={saveTrack}
-                          disabled={uploadState === 'uploading'}
-                          className="w-full py-4 bg-brand-primary text-white font-black uppercase tracking-widest text-[9px] rounded-2xl hover:bg-brand-primary/90 transition-all shadow-xl shadow-brand-primary/20 flex flex-col items-center justify-center gap-2 group overflow-hidden relative"
-                        >
-                          {uploadState === 'uploading' ? (
-                            <>
-                              <div className="flex items-center gap-2 relative z-10">
-                                <RefreshCw className="animate-spin" size={14} />
-                                <span>{Math.round(uploadProgress)}%</span>
+
+                        {/* Action buttons */}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={resetUpload}
+                            disabled={uploadState === 'uploading'}
+                            className="px-4 py-4 bg-surface-700 text-gray-300 font-black uppercase tracking-widest text-[9px] rounded-2xl hover:bg-surface-600 transition-all flex items-center gap-1.5 disabled:opacity-40"
+                          >
+                            <X size={12} /> Annuler
+                          </button>
+                          <button
+                            onClick={saveTrack}
+                            disabled={uploadState === 'uploading'}
+                            className="flex-1 py-4 bg-brand-primary text-white font-black uppercase tracking-widest text-[9px] rounded-2xl hover:bg-brand-primary/90 transition-all shadow-xl shadow-brand-primary/20 flex flex-col items-center justify-center gap-2 overflow-hidden relative disabled:opacity-60"
+                          >
+                            {uploadState === 'uploading' ? (
+                              <>
+                                <div className="flex items-center gap-2 relative z-10">
+                                  <RefreshCw className="animate-spin" size={14} />
+                                  <span>{Math.round(uploadProgress)}%</span>
+                                </div>
+                                <div className="absolute bottom-0 left-0 h-1 bg-white/40 transition-all duration-300 z-0" style={{ width: `${uploadProgress}%` }} />
+                              </>
+                            ) : (
+                              <div className="flex items-center gap-1.5 relative z-10">
+                                <Save size={14} />
+                                <span>Valider &amp; Publier</span>
                               </div>
-                              <div className="absolute bottom-0 left-0 h-1 bg-white/40 transition-all duration-300 z-0" style={{ width: `${uploadProgress}%` }} />
-                            </>
-                          ) : (
-                            <div className="flex items-center gap-1.5 relative z-10">
-                               <Save size={14} />
-                               <span>VALIDER / PUBLIER</span>
-                            </div>
-                          )}
-                        </button>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
