@@ -1,4 +1,4 @@
-import { LayoutDashboard, Disc, Mic2, Download, Library, Search, User, Bell, Play, Pause, SkipForward, SkipBack, Volume2, Share2, Heart, MoreHorizontal, ChevronRight, LogOut, LogIn, Database, Settings, Upload, Trash2, Save, Plus, Zap, AlertCircle, X } from 'lucide-react';
+import { LayoutDashboard, Disc, Mic2, Download, Library, Search, User, Bell, Play, Pause, SkipForward, SkipBack, Volume2, Share2, Heart, MoreHorizontal, ChevronRight, LogOut, LogIn, Database, Settings, Upload, Trash2, Save, Plus, Zap, AlertCircle, X, Palette } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef } from 'react';
 import { GENRES } from '../data';

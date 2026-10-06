@@ -75,6 +75,7 @@ export default function AdminPanel() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingTrack, setPendingTrack] = useState<Partial<Track>>({});
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [linkUrl, setLinkUrl] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [artworkFile, setArtworkFile] = useState<File | null>(null);
   const [artworkPreviewUrl, setArtworkPreviewUrl] = useState<string | null>(null);
@@ -146,6 +147,7 @@ export default function AdminPanel() {
   const resetUpload = () => {
     setPendingTrack({});
     setAudioFile(null);
+    setLinkUrl('');
     setArtworkFile(null);
     if (artworkPreviewUrl) URL.revokeObjectURL(artworkPreviewUrl);
     setArtworkPreviewUrl(null);
@@ -190,6 +192,50 @@ export default function AdminPanel() {
     }
   };
 
+  const handleUrlAdd = async () => {
+    const url = linkUrl.trim();
+    try {
+      const parsed = new URL(url);
+      if (!/^https?:$/.test(parsed.protocol)) throw new Error('protocol');
+    } catch {
+      alert('Lien invalide : entrez une URL http(s) complète vers un fichier audio.');
+      return;
+    }
+    setAudioFile(null);
+    setArtworkFile(null);
+    if (artworkPreviewUrl) URL.revokeObjectURL(artworkPreviewUrl);
+    setArtworkPreviewUrl(null);
+    setUploadState('extracting');
+
+    const fileName = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+    const baseName = fileName.replace(/\.[^/.]+$/, '');
+    const [guessArtist, ...rest] = baseName.split(' - ');
+    const hasArtist = rest.length > 0;
+
+    // Best-effort duration (fails silently if the host blocks it or the file is not audio)
+    const duration = await new Promise<string>((resolve) => {
+      const audio = new Audio();
+      const done = (v: string) => { audio.src = ''; resolve(v); };
+      audio.preload = 'metadata';
+      audio.onloadedmetadata = () => done(isFinite(audio.duration) ? formatDuration(audio.duration) : '0:00');
+      audio.onerror = () => done('0:00');
+      setTimeout(() => done('0:00'), 8000);
+      audio.src = url;
+    });
+
+    setPendingTrack({
+      title: (hasArtist ? rest.join(' - ') : baseName) || 'Sans titre',
+      artist: hasArtist ? guessArtist : 'Unknown Artist',
+      bpm: 120,
+      duration,
+      genre: 'House',
+      artwork: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=400&h=400&fit=crop',
+      previewUrl: url,
+      fileUrl: url,
+    });
+    setUploadState('ready');
+  };
+
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -209,7 +255,8 @@ export default function AdminPanel() {
   };
 
   const saveTrack = async () => {
-    if (!pendingTrack.title || !pendingTrack.artist || !audioFile) return;
+    const isLinkTrack = !audioFile && !!pendingTrack.fileUrl;
+    if (!pendingTrack.title || !pendingTrack.artist || (!audioFile && !isLinkTrack)) return;
 
     setUploadState('uploading');
     setUploadProgress(0);
@@ -223,23 +270,26 @@ export default function AdminPanel() {
         artworkUrl = await getDownloadURL(artworkRef);
       }
 
-      // 2. Upload audio file to Firebase Storage
-      const storageRef = ref(storage, `tracks/${Date.now()}_${audioFile.name}`);
-      const uploadTask = uploadBytesResumable(storageRef, audioFile);
+      // 2. Upload audio file to Firebase Storage (or reuse the provided link)
+      let downloadUrl = pendingTrack.fileUrl || '';
+      if (audioFile) {
+        const storageRef = ref(storage, `tracks/${Date.now()}_${audioFile.name}`);
+        const uploadTask = uploadBytesResumable(storageRef, audioFile);
 
-      const downloadUrl = await new Promise<string>((resolve, reject) => {
-        uploadTask.on('state_changed',
-          (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            setUploadProgress(progress);
-          },
-          (error) => reject(error),
-          async () => {
-            const url = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve(url);
-          }
-        );
-      });
+        downloadUrl = await new Promise<string>((resolve, reject) => {
+          uploadTask.on('state_changed',
+            (snapshot) => {
+              const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+              setUploadProgress(progress);
+            },
+            (error) => reject(error),
+            async () => {
+              const url = await getDownloadURL(uploadTask.snapshot.ref);
+              resolve(url);
+            }
+          );
+        });
+      }
 
       // 3. Save metadata to Firestore
       await addDoc(collection(db, 'tracks'), {
@@ -667,6 +717,29 @@ export default function AdminPanel() {
                         )}
                       </label>
                     </label>
+
+                    {uploadState !== 'uploading' && !audioFile && pendingTrack.title === undefined && (
+                      <div className="space-y-1.5">
+                        <span className="text-[8px] font-black uppercase text-gray-500 block tracking-widest">Ou ajouter via un lien (URL)</span>
+                        <div className="flex gap-2">
+                          <input
+                            type="url"
+                            value={linkUrl}
+                            onChange={(e) => setLinkUrl(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleUrlAdd(); }}
+                            placeholder="https://.../artiste - titre.mp3"
+                            className="flex-1 min-w-0 bg-surface-900 border border-surface-700 rounded-xl px-3 py-2 text-[10px] text-white focus:outline-none focus:border-brand-primary/50"
+                          />
+                          <button
+                            onClick={handleUrlAdd}
+                            disabled={!linkUrl.trim() || uploadState === 'extracting'}
+                            className="px-3 py-2 bg-brand-primary text-white font-black uppercase tracking-widest text-[8px] rounded-xl disabled:opacity-40"
+                          >
+                            Ajouter
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {pendingTrack.title !== undefined && (
                       <div className="space-y-3 animate-in fade-in zoom-in-95 duration-300">
